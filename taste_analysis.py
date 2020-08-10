@@ -1,11 +1,17 @@
 import csv
+import heapq
 from datetime import datetime, timedelta, timezone
-from collections import defaultdict
+from collections import defaultdict, Counter
 from tabulate import tabulate
 from dateutil.tz import gettz
 from dateutil.parser import parse
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, NamedTuple
 import sys
+
+
+class CustomerCount(NamedTuple):
+    count: int
+    email: str
 
 
 class TasteAnalysis:
@@ -17,10 +23,24 @@ class TasteAnalysis:
     Reads in the CSV file and sets member variables as needed
     """
 
+    @property
+    def customers(self):
+        return self.customer_count.keys()
+
     def __init__(self, path: str) -> None:
         print(f"Processing csv at: {path}")
         self.row_count = 0
-
+        self.customer_count = Counter()
+        self.best_customers: List[Tuple[int, str]] = []
+        with open(path, "r") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                self.customer_count[row["Email"]] += 1
+                self.row_count += 1
+        for customer, count in self.customer_count.items():
+            if count < self.BEST_CUSTOMER_MIN:
+                continue
+            self.best_customers.append(CustomerCount(count, customer))
         """
        
         YOUR CODE HERE
@@ -50,17 +70,10 @@ class TasteAnalysis:
 
     def print_best_customers(self) -> List[Tuple[int, str]]:
         print("=====BEST CUSTOMERS=====")
-        best_customers: List[Tuple[int, str]] = []
-
-        """
-      
-        YOUR CODE HERE
-
-        """
-
+        for element in self.best_customers:
+            print(element)
         print("\n\n")
-
-        return best_customers
+        return self.best_customers
 
     """
     Prints the customer repeat rate
@@ -74,14 +87,15 @@ class TasteAnalysis:
 
     def print_customer_repeat_rate(self) -> List[List[Any]]:
         print("=====CUSTOMER REPEAT RATE=====")
-        table: List[List[Any]] = []
-
-        """
-        
-        YOUR CODE HERE
-        
-        """
-
+        table: List[List[Any]] = [
+            ["Total Purchases Count", self.row_count],
+            ["Unique Customers", len(self.customer_count.keys())],
+        ] + [
+            [f"{count} Count", count_of_counts]
+            for count, count_of_counts in Counter(
+                sorted(self.customer_count.values())
+            ).items()
+        ]
         print(tabulate(table))
         print("\n\n")
         return table
