@@ -1,12 +1,12 @@
-import csv
-import heapq
-from datetime import datetime, timedelta, timezone
-from collections import defaultdict, Counter
-from tabulate import tabulate
-from dateutil.tz import gettz
-from dateutil.parser import parse
-from typing import Dict, Any, List, Tuple, NamedTuple
 import sys
+from collections import Counter
+from datetime import timedelta
+from typing import Any, List, Tuple, NamedTuple
+
+import pandas as pd
+from dateutil import parser
+from pytz import utc
+from tabulate import tabulate
 
 
 class CustomerCount(NamedTuple):
@@ -15,8 +15,8 @@ class CustomerCount(NamedTuple):
 
 
 class TasteAnalysis:
-    LAST_COHORT_END = "2020-07-25 00:00 UTC"  # Saturday
-    FIRST_COHORT_START = "2020-04-18 00:00 UTC"
+    LAST_COHORT_END = parser.parse("2020-07-25 00:00 UTC")  # Saturday
+    FIRST_COHORT_START = parser.parse("2020-04-18 00:00 UTC")
     BEST_CUSTOMER_MIN = 2  # Min is 2 orders
 
     """
@@ -25,30 +25,27 @@ class TasteAnalysis:
 
     @property
     def customers(self):
-        return self.customer_count.keys()
+        return self.freq_counts.keys()
 
     def __init__(self, path: str) -> None:
         print(f"Processing csv at: {path}")
-        self.row_count = 0
-        self.customer_count = Counter()
-        self.best_customers: List[Tuple[int, str]] = []
-        with open(path, "r") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                self.customer_count[row["Email"]] += 1
-                self.row_count += 1
-        for customer, count in self.customer_count.items():
-            if count < self.BEST_CUSTOMER_MIN:
-                continue
-            self.best_customers.append(CustomerCount(count, customer))
+        self.data: pd.DataFrame = pd.read_csv(path, parse_dates=True, header=0).iloc[
+            ::-1
+        ]
+        self.data["Created (UTC)"] = pd.to_datetime(
+            self.data["Created (UTC)"], utc=True
+        )
+        self.row_count = self.data.shape[0]
+        self.freq_counts = self.data["Email"].value_counts()
+        self.best_customers: List[Tuple[int, str]] = [
+            (count, email)
+            for email, count in self.freq_counts[
+                self.freq_counts > self.BEST_CUSTOMER_MIN
+            ].iteritems()
+        ]
         """
-       
-        YOUR CODE HERE
-        Process CSV and store in appropriate data structures
-        
         Hint: create a class member data structure to store self.customers, 
               optionally create a data structure to store frequency count
-       
         """
 
         print("Finished processing: ", self.row_count)
@@ -89,11 +86,11 @@ class TasteAnalysis:
         print("=====CUSTOMER REPEAT RATE=====")
         table: List[List[Any]] = [
             ["Total Purchases Count", self.row_count],
-            ["Unique Customers", len(self.customer_count.keys())],
+            ["Unique Customers", len(self.freq_counts.keys())],
         ] + [
             [f"{count} Count", count_of_counts]
             for count, count_of_counts in Counter(
-                sorted(self.customer_count.values())
+                sorted(self.freq_counts.tolist())
             ).items()
         ]
         print(tabulate(table))
@@ -134,13 +131,41 @@ class TasteAnalysis:
                 "Buy Avg",
             ]
         )
+        curr_cohort_start = self.data["Created (UTC)"].iloc[0]
+        customers_seen = set()
+        results = []
+        curr_cohort_new_customers = 0
+        curr_cohort_repeat_customers = 0
+        week_later = timedelta(weeks=1)
 
-        """
-        
-        YOUR CODE HERE
+        for _, row in self.data.iterrows():
+            email, date = row["Email"], row["Created (UTC)"]
+            if date > self.LAST_COHORT_END:
+                break
+            if date > curr_cohort_start + week_later:
+                total_cohort_customers = (
+                    curr_cohort_new_customers + curr_cohort_repeat_customers
+                )
+                results.append(
+                    [
+                        curr_cohort_start,
+                        total_cohort_customers,
+                        curr_cohort_repeat_customers / total_cohort_customers,
+                        curr_cohort_new_customers / total_cohort_customers,
+                        0,  # TODO: what does average mean?
+                    ]
+                )
+                curr_cohort_start += week_later
+                curr_cohort_new_customers = 0
+                curr_cohort_repeat_customers = 0
+            if email in customers_seen:
+                curr_cohort_repeat_customers += 1
+            else:
+                curr_cohort_new_customers += 1
+            customers_seen.add(email)
 
-        """
-
+        while curr_cohort_start < self.LAST_COHORT_END:
+            curr_cohort_start += week_later
         print(tabulate(table, headers="firstrow"))
         return table
 
