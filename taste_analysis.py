@@ -13,14 +13,90 @@ class CustomerCount(NamedTuple):
     email: str
 
 
+class AnalysisException(Exception):
+    pass
+
+
 class TasteAnalysis:
     LAST_COHORT_END = parser.parse("2020-07-25 00:00 UTC")  # Saturday
     FIRST_COHORT_START = parser.parse("2020-04-18 00:00 UTC")
+    MAX_NUM_COHORTS = (LAST_COHORT_END - FIRST_COHORT_START).days // 7
     BEST_CUSTOMER_MIN = 2  # Min is 2 orders
 
-    """
-    Reads in the CSV file and sets member variables as needed
-    """
+    class CohortAnalysis:
+        """
+        Using a nested class to take advantage of TasteAnalysis class vars
+        """
+
+        WEEK_LATER = timedelta(weeks=1)
+
+        def __init__(self):
+            self.results = []
+            self.total_num_purchases = 0
+            self.curr_cohort_start = TasteAnalysis.FIRST_COHORT_START
+            self.curr_cohort_customers = set()
+            self.all_customers = set()
+            self.curr_cohort_repeat_customer_count = 0
+            self.curr_cohort_new_customer_count = 0
+
+        def fill_rest_of_results(self):
+            while len(self.results) < TasteAnalysis.MAX_NUM_COHORTS:
+                self._add_to_results_and_refresh_local_data()
+
+        def _refresh_cohort_data_for_new_cohort(self):
+            self.curr_cohort_start += self.WEEK_LATER
+            self.curr_cohort_customers = set()
+            self.curr_cohort_new_customer_count = 0
+            self.curr_cohort_repeat_customer_count = 0
+
+        def _add_to_results_and_refresh_local_data(self):
+            if self.total_num_purchases == 0:
+                raise ZeroDivisionError(
+                    "Need at least one transaction in the whole dataset"
+                )
+            total_cohort_customers = len(self.curr_cohort_customers)
+            cohort_repeat_percent = (
+                (100 * self.curr_cohort_repeat_customer_count / total_cohort_customers)
+                if total_cohort_customers
+                else 0
+            )
+            cohort_new_percent = (
+                (100 * self.curr_cohort_new_customer_count / total_cohort_customers)
+                if total_cohort_customers
+                else 0
+            )
+            avg_purchases_since_beginning = self.total_num_purchases / len(
+                self.all_customers
+            )
+            new_result = [
+                self.curr_cohort_start.strftime("%Y-%m-%d"),
+                total_cohort_customers,
+                f"{self.curr_cohort_repeat_customer_count} ({cohort_repeat_percent:.0f}%)",
+                f"{self.curr_cohort_new_customer_count} ({cohort_new_percent:.0f}%)",
+                f"{avg_purchases_since_beginning:.2f}",
+            ]
+            self.results.append(new_result)
+            self._refresh_cohort_data_for_new_cohort()
+
+        def process_transaction(self, email, date):
+            if len(self.results) == TasteAnalysis.MAX_NUM_COHORTS:
+                raise AnalysisException(
+                    f"Cannot have more than {TasteAnalysis.MAX_NUM_COHORTS} cohorts"
+                )
+            if date > TasteAnalysis.LAST_COHORT_END:
+                raise AnalysisException(
+                    f"Cannot add data past {TasteAnalysis.LAST_COHORT_END}"
+                )
+            self.total_num_purchases += 1
+            if date > self.curr_cohort_start + self.WEEK_LATER:
+                self._add_to_results_and_refresh_local_data()
+            if email in self.all_customers:
+                if email not in self.curr_cohort_customers:
+                    self.curr_cohort_repeat_customer_count += 1
+            else:
+                self.curr_cohort_new_customer_count += 1
+            self.all_customers.add(email)
+            self.curr_cohort_customers.add(email)
 
     @property
     def customers(self):
@@ -116,11 +192,8 @@ class TasteAnalysis:
     """
 
     def print_weekly_cohort_analysis(self) -> List[List[Any]]:
-        # calculate repeat purchases by cohort
         print("=====WEEKLY COHORT ANALYSIS=====")
-
-        table = []
-        table.append(
+        table = [
             [
                 "Cohort Start Date",
                 "Total Cohort Customers",
@@ -128,78 +201,15 @@ class TasteAnalysis:
                 "New Customers (%)",
                 "Buy Avg",
             ]
-        )
-        curr_cohort_start = self.FIRST_COHORT_START
-        all_customer_emails = set()
-        curr_cohort_customers = set()
-        results = []
-        curr_cohort_new_customers = 0
-        curr_cohort_repeat_customers = 0
-        week_later = timedelta(weeks=1)
-
-        for purchase_idx, row in self.data.iterrows():
+        ]
+        cohort_analysis = self.CohortAnalysis()
+        for _, row in self.data.iterrows():
             email, date = row["Email"], row["Created (UTC)"]
-            if len(results) == 14:
-                break
-            if date > self.LAST_COHORT_END:
-                break
-            if date > curr_cohort_start + week_later:
-                total_cohort_customers = len(curr_cohort_customers)
-                avg_purchases_since_beginning = (purchase_idx + 1) / len(
-                    all_customer_emails
-                )
-                # TODO: create some sort of thing to do this repeatedly
-                results.append(
-                    [
-                        curr_cohort_start.strftime("%Y-%m-%d"),
-                        total_cohort_customers,
-                        f"{curr_cohort_repeat_customers} ({curr_cohort_repeat_customers / total_cohort_customers}%)",
-                        f"{curr_cohort_new_customers} ({curr_cohort_new_customers / total_cohort_customers}%)",
-                        avg_purchases_since_beginning,
-                    ]
-                )
-                curr_cohort_start += week_later
-                curr_cohort_customers = set()
-                curr_cohort_new_customers = 0
-                curr_cohort_repeat_customers = 0
-            if email in all_customer_emails:
-                if email not in curr_cohort_customers:
-                    curr_cohort_repeat_customers += 1
-            else:
-                curr_cohort_new_customers += 1
-            all_customer_emails.add(email)
-            curr_cohort_customers.add(email)
-        # TODO: fstrings down here too
-        total_cohort_customers = (
-            curr_cohort_new_customers + curr_cohort_repeat_customers
-        )
-        avg_purchases_since_beginning = self.row_count / len(all_customer_emails)
-        # TODO: do I always do this?
-        results.append(
-            [
-                curr_cohort_start.strftime("%Y-%m-%d"),
-                total_cohort_customers,
-                f"{curr_cohort_repeat_customers} ({100*curr_cohort_repeat_customers / total_cohort_customers:.0f}%)",
-                f"{curr_cohort_new_customers} ({100*curr_cohort_new_customers / total_cohort_customers:.0f}%)",
-                f"{avg_purchases_since_beginning:.2f}",
-            ]
-        )
-
-        while len(results) < 14:
-            results.append(
-                [
-                    curr_cohort_start.strftime("%Y-%m-%d"),
-                    0,
-                    0,
-                    0,
-                    avg_purchases_since_beginning,
-                ]
-            )
-            curr_cohort_start += week_later
-        while curr_cohort_start < self.LAST_COHORT_END:
-            curr_cohort_start += week_later
+            cohort_analysis.process_transaction(email, date)
+        cohort_analysis.fill_rest_of_results()
+        table += cohort_analysis.results
         print(tabulate(table, headers="firstrow"))
-        return table + results
+        return table
 
 
 if __name__ == "__main__":
