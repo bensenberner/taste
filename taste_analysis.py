@@ -5,7 +5,6 @@ from typing import Any, List, Tuple, NamedTuple
 
 import pandas as pd
 from dateutil import parser
-from pytz import utc
 from tabulate import tabulate
 
 
@@ -29,9 +28,8 @@ class TasteAnalysis:
 
     def __init__(self, path: str) -> None:
         print(f"Processing csv at: {path}")
-        self.data: pd.DataFrame = pd.read_csv(path, parse_dates=True, header=0).iloc[
-            ::-1
-        ]
+        self.data: pd.DataFrame = pd.read_csv(path, parse_dates=True, header=0)
+        self.data.reindex(index=self.data.index[::-1])
         self.data["Created (UTC)"] = pd.to_datetime(
             self.data["Created (UTC)"], utc=True
         )
@@ -131,43 +129,77 @@ class TasteAnalysis:
                 "Buy Avg",
             ]
         )
-        curr_cohort_start = self.data["Created (UTC)"].iloc[0]
-        customers_seen = set()
+        curr_cohort_start = self.FIRST_COHORT_START
+        all_customer_emails = set()
+        curr_cohort_customers = set()
         results = []
         curr_cohort_new_customers = 0
         curr_cohort_repeat_customers = 0
         week_later = timedelta(weeks=1)
 
-        for _, row in self.data.iterrows():
+        for purchase_idx, row in self.data.iterrows():
             email, date = row["Email"], row["Created (UTC)"]
+            if len(results) == 14:
+                break
             if date > self.LAST_COHORT_END:
                 break
             if date > curr_cohort_start + week_later:
-                total_cohort_customers = (
-                    curr_cohort_new_customers + curr_cohort_repeat_customers
+                total_cohort_customers = len(curr_cohort_customers)
+                avg_purchases_since_beginning = (purchase_idx + 1) / len(
+                    all_customer_emails
                 )
+                # TODO: create some sort of thing to do this repeatedly
                 results.append(
                     [
-                        curr_cohort_start,
+                        curr_cohort_start.strftime("%Y-%m-%d"),
                         total_cohort_customers,
-                        curr_cohort_repeat_customers / total_cohort_customers,
-                        curr_cohort_new_customers / total_cohort_customers,
-                        0,  # TODO: what does average mean?
+                        f"{curr_cohort_repeat_customers} ({curr_cohort_repeat_customers / total_cohort_customers}%)",
+                        f"{curr_cohort_new_customers} ({curr_cohort_new_customers / total_cohort_customers}%)",
+                        avg_purchases_since_beginning,
                     ]
                 )
                 curr_cohort_start += week_later
+                curr_cohort_customers = set()
                 curr_cohort_new_customers = 0
                 curr_cohort_repeat_customers = 0
-            if email in customers_seen:
-                curr_cohort_repeat_customers += 1
+            if email in all_customer_emails:
+                if email not in curr_cohort_customers:
+                    curr_cohort_repeat_customers += 1
             else:
                 curr_cohort_new_customers += 1
-            customers_seen.add(email)
+            all_customer_emails.add(email)
+            curr_cohort_customers.add(email)
+        # TODO: fstrings down here too
+        total_cohort_customers = (
+            curr_cohort_new_customers + curr_cohort_repeat_customers
+        )
+        avg_purchases_since_beginning = self.row_count / len(all_customer_emails)
+        # TODO: do I always do this?
+        results.append(
+            [
+                curr_cohort_start.strftime("%Y-%m-%d"),
+                total_cohort_customers,
+                f"{curr_cohort_repeat_customers} ({100*curr_cohort_repeat_customers / total_cohort_customers:.0f}%)",
+                f"{curr_cohort_new_customers} ({100*curr_cohort_new_customers / total_cohort_customers:.0f}%)",
+                f"{avg_purchases_since_beginning:.2f}",
+            ]
+        )
 
+        while len(results) < 14:
+            results.append(
+                [
+                    curr_cohort_start.strftime("%Y-%m-%d"),
+                    0,
+                    0,
+                    0,
+                    avg_purchases_since_beginning,
+                ]
+            )
+            curr_cohort_start += week_later
         while curr_cohort_start < self.LAST_COHORT_END:
             curr_cohort_start += week_later
         print(tabulate(table, headers="firstrow"))
-        return table
+        return table + results
 
 
 if __name__ == "__main__":
